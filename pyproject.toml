@@ -1,0 +1,20 @@
+[project]
+name = "xszj-sh"
+version = "0.1.0"
+description = "xszj.org 小说爬取 + 阅读一体化应用（FastAPI + SQLite + Vue3）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+]
+
+[project.optional-dependencies]
+# 可选增强：用无头浏览器过 Cloudflare 抓取完整目录页 /cs/N
+# 安装：uv sync --extra playwright && uv run playwright install chromium
+playwright = ["playwright>=1.45"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+.uv/
+uv.lock.bak
+.DS_Store

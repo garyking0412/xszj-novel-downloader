@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>小说书架</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <a class="brand" href="#/" @click.prevent="go('shelf')">📚 小说书架</a>
+    <nav class="topnav">
+      <a href="#/" :class="{active: route.view==='shelf'}" @click.prevent="go('shelf')">书架</a>
+      <a href="#/search" :class="{active: route.view==='search'}" @click.prevent="go('search')">搜索添加</a>
+    </nav>
+  </header>
+
+  <!-- 全局提示 -->
+  <transition name="fade">
+    <div v-if="toast.msg" class="toast" :class="toast.type">{{ toast.msg }}</div>
+  </transition>
+
+  <main class="container">
+
+    <!-- ============ 书架 ============ -->
+    <section v-if="route.view==='shelf'">
+      <div class="add-bar">
+        <input v-model.trim="addUrl" type="text" placeholder="粘贴书籍或章节链接，如 https://xszj.org/b/490683/"
+               @keyup.enter="addBook" :disabled="adding"/>
+        <button class="btn primary" @click="addBook" :disabled="adding || !addUrl">
+          {{ adding ? '添加中…' : '＋ 添加书籍' }}
+        </button>
+      </div>
+
+      <p v-if="!books.length" class="empty">书架空空如也，粘贴一个书籍链接开始吧。</p>
+
+      <div class="book-grid">
+        <div class="book-card" v-for="b in books" :key="b.id">
+          <a class="cover" href="#" @click.prevent="openBook(b.id)">
+            <img v-if="b.cover_url" :src="b.cover_url" :alt="b.title" loading="lazy"
+                 @error="$event.target.style.display='none'"/>
+            <span v-else class="cover-ph">{{ b.title.slice(0,2) }}</span>
+          </a>
+          <div class="card-body">
+            <h3><a href="#" @click.prevent="openBook(b.id)">{{ b.title }}</a></h3>
+            <p class="sub">{{ b.author }} · {{ b.status || '未知状态' }} · {{ b.chapter_count }} 章</p>
+
+            <!-- 爬取进度 -->
+            <div v-if="b.task && isActive(b.task)" class="task-box">
+              <div class="task-line">
+                <span class="spinner"></span>
+                <span v-if="b.task.total">爬取中 {{ b.task.crawled }}/{{ b.task.total }}
+                  （{{ Math.round(b.task.crawled*100/b.task.total) }}%）</span>
+                <span v-else>爬取中：已入库 {{ b.task.crawled }} 章</span>
+                <button class="btn tiny" @click="cancelTask(b.task.id)">取消</button>
+              </div>
+              <div class="pbar" v-if="b.task.total">
+                <div class="pbar-in" :style="{width: (b.task.crawled*100/b.task.total)+'%'}"></div>
+              </div>
+              <p class="task-title" v-if="b.task.current_title">{{ b.task.current_title }}</p>
+            </div>
+            <div v-else-if="b.task && b.task.status==='failed'" class="task-failed">
+              爬取失败：{{ b.task.error }}
+              <button class="btn tiny" @click="startCrawl(b.id,'auto')">重试</button>
+            </div>
+
+            <p class="sub" v-if="b.progress_cid">读到：第 {{ b.progress_order }} 章</p>
+
+            <div class="card-actions">
+              <button class="btn primary sm" @click="continueRead(b)" :disabled="!b.chapter_count">
+                {{ b.progress_cid ? '继续阅读' : '开始阅读' }}
+              </button>
+              <button class="btn sm" v-if="(b.status||'').includes('连载')"
+                      @click="startCrawl(b.id,'update')">检查更新</button>
+              <button class="btn sm" :disabled="!b.chapter_count"
+                      @click="exportBook(b.id,'txt')">TXT</button>
+              <button class="btn sm" :disabled="!b.chapter_count"
+                      @click="exportBook(b.id,'epub')">EPUB</button>
+              <button class="btn sm danger" @click="removeBook(b)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 搜索 ============ -->
+    <section v-if="route.view==='search'">
+      <div class="add-bar">
+        <input v-model.trim="keyword" type="text" placeholder="书名 / 作者 / 主角名"
+               @keyup.enter="doSearch" :disabled="searching"/>
+        <button class="btn primary" @click="doSearch" :disabled="searching || !keyword">
+          {{ searching ? '搜索中…' : '搜索' }}
+        </button>
+      </div>
+
+      <!-- 站内图形验证码 -->
+      <div v-if="captcha" class="captcha-box">
+        <p class="sub">站点要求输入验证码才能搜索（点击图片可刷新）：</p>
+        <div class="captcha-row">
+          <img :src="captcha.image" alt="验证码" class="captcha-img"
+               @click="doSearch" title="点击刷新"/>
+          <input v-model.trim="captchaCode" type="text" placeholder="输入图中字符"
+                 @keyup.enter="submitCaptcha" :disabled="searching"/>
+          <button class="btn primary" @click="submitCaptcha"
+                  :disabled="searching || !captchaCode">
+            {{ searching ? '提交中…' : '提交' }}
+          </button>
+        </div>
+        <p v-if="captchaError" class="task-failed">{{ captchaError }}</p>
+      </div>
+
+      <p v-if="searched && !searchResults.length && !captcha" class="empty">
+        没有找到相关书籍。
+      </p>
+      <div class="search-list">
+        <div class="search-item" v-for="r in searchResults" :key="r.book_id">
+          <div>
+            <strong>{{ r.title }}</strong>
+            <span class="sub" v-if="r.author"> · {{ r.author }}</span>
+            <span class="sub" v-if="r.status"> · {{ r.status }}</span>
+          </div>
+          <button class="btn primary sm" @click="addById(r.book_id)">加入书架</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 书籍详情 ============ -->
+    <section v-if="route.view==='book' && detail">
+      <div class="detail-head">
+        <img v-if="detail.book.cover_url" class="detail-cover" :src="detail.book.cover_url" :alt="detail.book.title"/>
+        <div class="detail-info">
+          <h2>{{ detail.book.title }}</h2>
+          <p class="sub">作者：{{ detail.book.author }} · {{ detail.book.status }} · {{ detail.book.category }}</p>
+          <p class="sub">站内更新：{{ detail.book.site_update_time || '-' }} · 已入库 {{ detail.chapters.length }} 章</p>
+          <p class="intro">{{ detail.book.intro }}</p>
+          <div class="card-actions">
+            <button class="btn primary" @click="continueRead(detail.book)" :disabled="!detail.chapters.length">
+              {{ detail.progress ? '继续阅读' : '开始阅读' }}
+            </button>
+            <button class="btn" v-if="isActive(detail.book.task)" @click="cancelTask(detail.book.task.id)">取消爬取</button>
+            <button class="btn" v-else @click="startCrawl(detail.book.id,'auto')">续爬全书</button>
+            <button class="btn" @click="startCrawl(detail.book.id,'update')">检查更新</button>
+            <button class="btn" :disabled="!detail.chapters.length" @click="exportBook(detail.book.id,'txt')">导出 TXT</button>
+            <button class="btn" :disabled="!detail.chapters.length" @click="exportBook(detail.book.id,'epub')">导出 EPUB</button>
+          </div>
+          <div v-if="isActive(detail.book.task)" class="task-box">
+            <div class="task-line">
+              <span class="spinner"></span>
+              <span v-if="detail.book.task.total">爬取中 {{ detail.book.task.crawled }}/{{ detail.book.task.total }}</span>
+              <span v-else>爬取中：已入库 {{ detail.book.task.crawled }} 章</span>
+            </div>
+            <div class="pbar" v-if="detail.book.task.total">
+              <div class="pbar-in" :style="{width: (detail.book.task.crawled*100/detail.book.task.total)+'%'}"></div>
+            </div>
+            <p class="task-title" v-if="detail.book.task.current_title">{{ detail.book.task.current_title }}</p>
+          </div>
+          <p v-else-if="detail.book.task && detail.book.task.note" class="sub">ℹ️ {{ detail.book.task.note }}</p>
+          <p v-else-if="detail.book.task && detail.book.task.error" class="task-failed">{{ detail.book.task.error }}</p>
+        </div>
+      </div>
+
+      <h3 class="catalog-title">目录（{{ detail.chapters.length }} 章）</h3>
+      <ol class="catalog">
+        <li v-for="c in detail.chapters" :key="c.cid">
+          <a :href="'#/book/'+detail.book.id+'/read/'+c.cid"
+             :class="{read: detail.progress && c.order_index <= detail.progress.order_index}">
+            {{ c.title }}
+          </a>
+        </li>
+      </ol>
+      <p v-if="!detail.chapters.length" class="empty">章节尚未入库，等待爬取任务完成…</p>
+    </section>
+
+    <!-- ============ 阅读页 ============ -->
+    <section v-if="route.view==='read' && chapter" class="reader" :style="{'--fs': fontSize+'px'}">
+      <div class="reader-bar">
+        <a href="#" @click.prevent="go('shelf')">📚 书架</a>
+        <a href="#" @click.prevent="openBook(route.bookId)">目录</a>
+        <span class="fs-ctl">
+          <button class="btn tiny" @click="changeFont(-1)">A-</button>
+          <button class="btn tiny" @click="changeFont(1)">A+</button>
+        </span>
+      </div>
+      <h1 class="chapter-title">{{ chapter.title }}</h1>
+      <article class="chapter-body">
+        <p v-for="(para, i) in chapterParas" :key="i">{{ para }}</p>
+      </article>
+      <div class="reader-nav">
+        <button class="btn" :disabled="!chapter.prev"
+                @click="chapter.prev && readChapter(chapter.prev.cid)">上一章</button>
+        <button class="btn" @click="openBook(route.bookId)">目录</button>
+        <button class="btn primary" :disabled="!chapter.next"
+                @click="chapter.next && readChapter(chapter.next.cid)">下一章</button>
+      </div>
+      <p v-if="!chapter.next" class="sub center">已是最新一章</p>
+    </section>
+
+  </main>
+</div>
+
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
